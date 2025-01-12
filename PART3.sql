@@ -1,23 +1,3 @@
-﻿/*
- *		TECH 60701 -- Technologies de l'intelligence d'affaires
- *					HEC Montréal
- *		Travail Pratique 3
- *					Enseignant :
- *						J01 : Bogdan Negoita
- *		
- *		Instructions de remise :
- *			- Répondre aux questions SQL directement dans ce fichier .sql
- *			- La remise du devoir doit être effectuée via ZoneCours dans l'outil de remise de travaux
- *			- Date de remise : voir les dates sur ZoneCours, aucun retard permis
- *
- *		Correction :
- *			- 9% de la note finale, /9
- *			- Une question qui génère une erreur (ne s'exécute pas) se verra attribuer automatiquement la note de 0.
- */
- 
-
-
-
 
 /*
 	Question #1 (2,5 points) :
