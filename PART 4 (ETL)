@@ -1,0 +1,475 @@
+
+
+
+
+---------------------------------------------------------------DDL ( creating tables)----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+if not exists (select * from sys.databases where name = 'TIA')
+Begin Create database TIA
+end
+GO
+
+Use TIA
+GO
+
+----------------CREATION TABLE DIMENSION DATE -----------------------------
+IF OBJECT_ID('dim_date', 'U') IS NOT NULL 
+  DROP TABLE dim_date;
+
+create table [dim_date] (
+
+date_id	int	identity(1,1)  CONSTRAINT PK_dim_date primary key,
+[date]	datetime	not null,
+jour	tinyint	not null,
+mois	tinyint	not null,
+trimestre	tinyint	not null ,
+annee_civile	smallint	not null,
+annee_fiscale	smallint	not null,
+trimestre_fiscal	tinyint	not null,
+plan_strategique	smallint	not null,
+
+CONSTRAINT CK_jour_mois_valide CHECK (
+    (mois IN (1, 3, 5, 7, 8, 10, 12) AND jour BETWEEN 1 AND 31) OR
+    (mois IN (4, 6, 9, 11) AND jour BETWEEN 1 AND 30) OR
+    (mois = 2 AND jour BETWEEN 1 AND 28) OR
+    (mois = 2 AND jour BETWEEN 1 AND 29 AND ((annee_civile % 4 = 0 AND annee_civile % 100 <> 0) OR (annee_civile % 400 = 0)))),
+CONSTRAINT CK_trimestre_valide CHECK (
+        (trimestre BETWEEN 1 AND 4) AND 
+        ((mois BETWEEN 1 AND 3 AND trimestre = 1) OR 
+        (mois BETWEEN 4 AND 6 AND trimestre = 2) OR 
+        (mois BETWEEN 7 AND 9 AND trimestre = 3) OR 
+        (mois BETWEEN 10 AND 12 AND trimestre = 4))),
+CONSTRAINT CK_annee_civile_valide CHECK (annee_civile >= annee_fiscale),
+CONSTRAINT CK_annee_fiscale_valide CHECK (
+        ((mois BETWEEN 6 AND 12 AND annee_fiscale = annee_civile) OR
+        (mois BETWEEN 1 AND 5 AND annee_fiscale = annee_civile - 1))),
+CONSTRAINT CK_trimestre_fiscal_valide CHECK 
+        (trimestre_fiscal in (1,2,3,4) AND 
+        (((mois BETWEEN 6 AND 8 AND trimestre_fiscal = 1) OR 
+        (mois BETWEEN 9 AND 11 AND trimestre_fiscal = 2) OR 
+        (mois IN (12, 1, 2) AND trimestre_fiscal = 3) OR 
+        (mois BETWEEN 3 AND 5 AND trimestre_fiscal = 4))))
+
+);
+GO
+
+  
+------------------CREATION TABLE DIMENSION PRODUIT ----------------------------------------
+----cette table est type 2 car ces attributs ( ex : nom du produit) peuvent changer--------
+
+IF OBJECT_ID('dim_produit', 'U') IS NOT NULL 
+  DROP TABLE dim_produit;
+
+CREATE TABLE dim_produit(
+    produit_No int identity(1,1) CONSTRAINT PK_dim_produit primary key,
+	product_name nvarchar(50) not null,
+	ProductNumber nvarchar(25) not null,
+	Jours_Sur_Le_Marche int not null,
+	Evaluation_Moyenne decimal(3,2),
+	Margeproduit decimal(10,2) not null,
+	Style_Produit nvarchar(11),
+	EffectiveDate datetime not null,
+	ExpirationDate datetime not null default ('9999-12-31'),
+	CurrentStatus varchar(7) not null default ('Current'),
+	constraint rating_entry check (Evaluation_Moyenne between 1 and 5),
+	CONSTRAINT CK_Jours_Sur_Le_Marche CHECK (Jours_Sur_Le_Marche >= 0),
+    CONSTRAINT CK_Evaluation_Moyenne CHECK (Evaluation_Moyenne BETWEEN 1 AND 5),
+    CONSTRAINT CK_Style_Produit CHECK (Style_Produit IN ('Women', 'Men', 'Universal', 'Unavailable')),
+	CONSTRAINT CK_DATE_TYPE2 check (EffectiveDate < ExpirationDate)                                            ---- a ajouter metadonees et index -------
+);
+GO
+
+  
+	
+
+---------------------- CREATION TABLE SalesTerritory-------------------------------
+----------------------AUSSI TYPE 2 (EX: LES ZONES GEOGRAPHIQUES PEUVENT CHANGER) -----------------------------------------
+
+IF OBJECT_ID('dim_SalesTerritory ', 'U') IS NOT NULL  
+  DROP TABLE dim_SalesTerritory ;
+
+CREATE TABLE dim_SalesTerritory(
+    SalesTerritory_ID int identity(1,1) CONSTRAINT PK_dim_SalesTerritory primary key,
+    Nom_Territoire NVARCHAR(50) NOT NULL,
+    Code_Pays_Region_ISO NVARCHAR(3) NOT NULL,
+    Zone_Geographique NVARCHAR(50) NOT NULL,
+    Annee_Vente SMALLINT NOT NULL,
+    Total_Ventes_Annee_Courante money NOT NULL,
+    Total_Ventes_Annee_Precedente money NOT NULL ,
+    Difference_Ventes money NOT NULL,
+    Difference_Pourcentage DECIMAL(5, 2),
+	EffectiveDate datetime not null,
+	ExpirationDate datetime not null default ('9999-12-31'),
+	CurrentStatus varchar(7) not null default ('Current'),
+	CONSTRAINT CK_DATE2_TYPE2 check (EffectiveDate < ExpirationDate) 
+	);
+GO
+
+  
+
+
+--------------CREATION TABLE fait_Vente------------------------------------
+
+IF OBJECT_ID('fait_vente', 'U') IS NOT NULL 
+  DROP TABLE fait_vente;
+
+Create table fait_vente(
+
+Vente_ID int identity(1,1) CONSTRAINT PK_dim_fait_vente primary key,
+Quantite_vendue int not null,
+Valeur_Rabais money not null,
+Benefice_Percu money not null,
+produit_No int not null CONSTRAINT FK_dim_produit references dim_produit(produit_No),
+SalesTerritory_ID int not null CONSTRAINT FK_dim_SalesTerritory references dim_SalesTerritory (SalesTerritory_ID),
+date_id	int	not null CONSTRAINT FK_dim_date references dim_date(date_id)
+
+);
+GO
+
+
+
+
+
+
+
+
+-------------------------------------------------------- ----------------------------------------------------DIMENSION "PRODUIT'-------------------------------------------------------------------------------------------------------------
+
+
+
+USE TIA;
+GO
+
+IF OBJECT_ID('stage_produit', 'U') IS NOT NULL
+    DROP TABLE stage_produit;
+
+IF OBJECT_ID('product_upload', 'P') IS NOT NULL
+    DROP PROCEDURE product_upload;
+
+CREATE TABLE stage_produit (
+    ProductID INT not null,
+    Evaluation DECIMAL(3,2) not null
+    );
+GO
+
+CREATE OR ALTER PROCEDURE product_upload
+    @LoadType BIT
+AS
+BEGIN TRANSACTION
+BEGIN TRY 
+
+    -- Charger les données CSV dans la table de staging
+    BULK INSERT stage_produit   
+    FROM 'C:\Users\Gilles\Desktop\TP 4\produits_evaluations.csv'
+    WITH
+    (
+        FIRSTROW = 3,            
+        FIELDTERMINATOR = ';',    
+        ROWTERMINATOR = '\n',    
+        MAXERRORS = 0,
+        TABLOCK                    
+    );
+
+    -- Charger les données JSON dans la table de staging 
+    DECLARE @json NVARCHAR(MAX);
+
+    SELECT @json = BulkColumn FROM OPENROWSET (BULK 'C:\Users\Gilles\Desktop\TP 4\produits_evaluations.json', SINGLE_CLOB) AS j;
+
+    INSERT INTO stage_produit (ProductID, Evaluation)
+    SELECT 
+        ProductID,
+        Evaluation
+    FROM OPENJSON(@json)
+    WITH (
+        ProductID INT '$.ProductID',
+        Evaluation DECIMAL(3,2) '$.Evaluation'
+    );
+
+    IF (@LoadType = 0) 
+    BEGIN 
+        INSERT INTO dim_produit (product_name, ProductNumber, Jours_Sur_Le_Marche, Evaluation_Moyenne, Style_Produit, Margeproduit, EffectiveDate)
+        SELECT 
+        pp.[Name] AS product_name,
+        pp.ProductNumber as ProductNumber,
+        CASE
+            WHEN pp.SellEndDate IS NULL THEN DATEDIFF(DAY, pp.SellStartDate, GETDATE())
+            ELSE DATEDIFF(DAY, pp.SellStartDate, pp.SellEndDate)
+        END AS Jours_Sur_Le_Marche,
+        ROUND(AVG(COALESCE(sp.Evaluation, pr.Rating)), 2) AS Evaluation_Moyenne,
+        CASE
+            WHEN pp.Style = 'W' THEN 'Women'
+            WHEN pp.Style = 'M' THEN 'Men'
+            WHEN pp.Style = 'U' THEN 'Universal'
+            ELSE 'Unavailable'
+        END AS Style_Produit,
+        CASE
+            WHEN sod.UnitPriceDiscount > 0 THEN pp.StandardCost * (1 - sod.UnitPriceDiscount)
+            ELSE pp.StandardCost
+        END AS Margeproduit,
+        pp.ModifiedDate
+        FROM AdventureWorks2022.Production.Product pp
+        LEFT JOIN AdventureWorks2022.Sales.SalesOrderDetail sod ON pp.ProductID = sod.ProductID
+        LEFT JOIN AdventureWorks2022.Production.ProductReview pr ON pp.ProductID = pr.ProductID
+        LEFT JOIN stage_produit sp ON pp.ProductID = sp.ProductID
+        GROUP BY 
+        pp.[Name], 
+        pp.ProductNumber, 
+        pp.SellEndDate, 
+        pp.SellStartDate, 
+        pp.Style, 
+        pp.StandardCost,
+        sod.UnitPriceDiscount,
+        pp.ModifiedDate
+		
+   
+  end
+	END TRY
+
+BEGIN CATCH
+    print('') 
+      PRINT('Numéro d''erreur = ' + CAST(ERROR_NUMBER() AS CHAR(10)))
+   PRINT('Gravité de l''erreur = ' + CAST(ERROR_SEVERITY() AS CHAR(10)))
+      PRINT('Ligne de l''erreur = ' + CAST(ERROR_LINE() AS CHAR(10)))
+    PRINT('Message de l''erreur = ' + CAST(ERROR_MESSAGE() AS CHAR(400)))
+
+ IF @@TRANCOUNT > 0 
+        ROLLBACK TRANSACTION; -- annuler la transaction en cas d'erreur
+END CATCH
+
+IF @@TRANCOUNT > 0
+    COMMIT TRANSACTION; ---- Valider la transaction s'il n'y a pas d'erreurs
+GO
+
+--- CREATION INDEX ---
+--- drop si existe
+IF EXISTS (SELECT name FROM sys.indexes WHERE name = 'idx_Margeproduit' AND object_id = OBJECT_ID('dim_produit'))
+    DROP INDEX idx_Margeproduit ON dim_produit;
+GO
+
+--- creer index---
+CREATE INDEX idx_Margeproduit ON dim_produit (Margeproduit);
+
+/*Pourquoi avoir utiliser un index sur l'attribut Margeproduit ?
+
+1. Performance des requêtes: Accélère les requêtes filtrant ou triant par Margeproduit.
+2. Analyses rapides: Facilite les calculs et rapports sur les marges de profit.
+3. Filtres et tris: Rend les opérations de tri et de filtrage plus rapides.
+4. Optimisation: Réduit la charge sur le serveur, surtout pour de grandes tables.*/
+
+----creation metadonnes -------
+EXEC sys.sp_addextendedproperty 
+    @name = N'MS_Description', 
+    @value = N'Product style (Women, Men, Universal, Unavailable – if NULL)', 
+    @level0type = N'SCHEMA', @level0name = N'dbo', 
+    @level1type = N'TABLE', @level1name = N'dim_produit', 
+    @level2type = N'COLUMN', @level2name = N'Style_Produit';
+GO
+
+
+----execute la procedure----------
+EXEC dbo.product_upload @LoadType = 0;
+
+select * from dbo.dim_produit p
+
+
+
+------------------------------------------------------------------------------------------------------------------DIMENSION SALESTERRITORY--------------------------------------------------------------------------------------------------
+
+USE TIA
+GO
+
+IF OBJECT_ID('populate_dim_SalesTerritory', 'P') IS NOT NULL
+    DROP PROCEDURE populate_dim_SalesTerritory;
+GO
+
+CREATE PROCEDURE populate_dim_SalesTerritory
+AS
+BEGIN TRANSACTION
+BEGIN TRY
+ 
+    -- Insert new data into the dimension table
+    INSERT INTO dim_SalesTerritory (Nom_Territoire, Code_Pays_Region_ISO, Zone_Geographique, Annee_Vente, Total_Ventes_Annee_Courante, Total_Ventes_Annee_Precedente, Difference_Ventes, Difference_Pourcentage,EffectiveDate)
+    SELECT 
+        st.[Name] AS Nom_Territoire,
+        st.CountryRegionCode AS Code_Pays_Region_ISO,
+        st.[Group] AS Zone_Geographique,
+        YEAR(soh.OrderDate) AS Annee_Vente,
+        SUM(soh.SubTotal)  AS Total_Ventes_Annee_Courante,
+        LAG(SUM(soh.SubTotal), 1, 0) OVER (PARTITION BY st.[Name], st.CountryRegionCode, st.[Group] ORDER BY YEAR(soh.OrderDate)) AS Total_Ventes_Annee_Precedente,
+        SUM(soh.SubTotal) - LAG(SUM(soh.SubTotal), 1, 0) OVER (PARTITION BY st.[Name], st.[CountryRegionCode], st.[Group] ORDER BY YEAR(soh.OrderDate)) AS Difference_Ventes,
+        (SUM(soh.SubTotal) - LAG(SUM(soh.SubTotal), 1, 0) OVER (PARTITION BY st.[Name], st.[CountryRegionCode], st.[Group] ORDER BY YEAR(soh.OrderDate))) / NULLIF(LAG(SUM(soh.SubTotal), 1, 0) OVER (PARTITION BY st.[Name], st.[CountryRegionCode], st.[Group] ORDER BY YEAR(soh.OrderDate)), 0)*100 AS Difference_Pourcentage,
+		st.ModifiedDate AS EffectiveDate
+    FROM AdventureWorks2022.sales.SalesTerritory st
+    INNER JOIN AdventureWorks2022.sales.SalesOrderHeader soh ON st.TerritoryID = soh.TerritoryID
+    GROUP BY st.[Name],st.CountryRegionCode, st.[Group], YEAR(soh.OrderDate), st.ModifiedDate
+	order by 1,4  --- ajout pour meilleure lecture seulement
+END TRY
+
+BEGIN CATCH
+    PRINT('')
+    PRINT('Numéro d''erreur = ' + CAST(ERROR_NUMBER() AS CHAR(10)))
+    PRINT('Gravité de l''erreur = ' + CAST(ERROR_SEVERITY() AS CHAR(10)))
+    PRINT('Ligne de l''erreur = ' + CAST(ERROR_LINE() AS CHAR(10)))
+    PRINT('Message de l''erreur = ' + CAST(ERROR_MESSAGE() AS CHAR(400)))
+
+    IF @@TRANCOUNT > 0 
+        ROLLBACK TRANSACTION; -- annuler la transaction en cas d'erreur
+END CATCH
+
+IF @@TRANCOUNT > 0
+    COMMIT TRANSACTION; ---- Valider la transaction s'il n'y a pas d'erreurs
+GO
+
+
+exec dbo.populate_dim_SalesTerritory
+
+select * from [dbo].[dim_SalesTerritory] 
+
+
+
+
+-----------------------------------------------------------------------------------------------------------------DIMENSION DATE-------------------------------------------------------------------------------------------------------------
+
+
+
+
+USE TIA;
+GO
+
+IF OBJECT_ID('populate_dim_date', 'P') IS NOT NULL
+    DROP PROCEDURE populate_dim_date;
+GO
+
+CREATE OR ALTER PROCEDURE populate_dim_date
+    @DateDebut DATE,
+    @DateFin DATE
+AS
+BEGIN TRANSACTION
+BEGIN TRY
+
+    ----- initialiser la date courante
+    DECLARE @DateCourante DATE = CONVERT(DATETIME, @DateDebut, 105);
+
+--- looper à travers chaque date du début à la fin
+    WHILE @DateCourante <= @DateFin
+    BEGIN
+        INSERT INTO dim_date ([date], jour, mois, trimestre, annee_civile, annee_fiscale, trimestre_fiscal, plan_strategique)
+        VALUES (
+            @DateCourante, -- [date]
+                DAY(@DateCourante), -- jour
+        MONTH(@DateCourante), --- mois
+            DATEPART(QUARTER, @DateCourante), -- trimestre
+    YEAR(@DateCourante), --- annee_civile
+            CASE 
+                WHEN MONTH(@DateCourante) >= 6 THEN YEAR(@DateCourante)
+                ELSE YEAR(@DateCourante) - 1
+        END, -- annee_fiscale
+            CASE 
+                WHEN MONTH(@DateCourante) BETWEEN 6 AND 8 THEN 1
+               WHEN MONTH(@DateCourante) BETWEEN 9 AND 11 THEN 2
+                WHEN MONTH(@DateCourante) IN (12, 1, 2) THEN 3
+    WHEN MONTH(@DateCourante) IN (3, 4, 5) THEN 4
+            END, -- trimestre_fiscal
+        FLOOR((DATEDIFF(YEAR, @DateDebut, @DateCourante) / 3.0) + 1) -- plan_strategique
+        );
+
+        set @DateCourante = DATEADD(DAY, 1, @DateCourante); ---- augmenter la date courante de 1 jour
+    END
+
+END TRY
+
+BEGIN CATCH
+    print('') 
+      PRINT('Numéro d''erreur = ' + CAST(ERROR_NUMBER() AS CHAR(10)))
+   PRINT('Gravité de l''erreur = ' + CAST(ERROR_SEVERITY() AS CHAR(10)))
+      PRINT('Ligne de l''erreur = ' + CAST(ERROR_LINE() AS CHAR(10)))
+    PRINT('Message de l''erreur = ' + CAST(ERROR_MESSAGE() AS CHAR(400)))
+
+ IF @@TRANCOUNT > 0 
+        ROLLBACK TRANSACTION; -- annuler la transaction en cas d'erreur
+END CATCH
+
+IF @@TRANCOUNT > 0
+    COMMIT TRANSACTION; ---- Valider la transaction s'il n'y a pas d'erreurs
+GO
+
+EXEC dbo.populate_dim_date '2012-01-01', '2013-12-31'; ---- exécuter la procédure stockée pour peupler la table dim_date ( intervalle de dates non spécifié dans l'énoncé, on peut prenre 2011 a 2014 aussi )
+select * from [dbo].[dim_date]
+
+
+
+
+---------------------------------------------------------------------------------------------------------FAIT VENTE-------------------------------------------------------------------------------------------------------------------------
+
+
+
+USE TIA;
+GO
+
+DROP PROCEDURE IF EXISTS populate_fait_Vente;
+GO
+
+CREATE PROCEDURE populate_fait_Vente
+AS
+BEGIN TRANSACTION
+BEGIN TRY
+
+    -- Insert data into fait_vente by joining dimension tables
+INSERT INTO [fait_vente] ([Quantite_vendue], [Valeur_Rabais], [Benefice_Percu], [date_id],[produit_No], [SalesTerritory_ID] )
+SELECT 
+    SUM(sod.[OrderQty]) AS [Quantite_vendue],
+    SUM(sod.[UnitPriceDiscount] * sod.[UnitPrice] * sod.[OrderQty]) AS [Valeur_Rabais],
+    SUM((sod.[UnitPrice] * (1 - sod.[UnitPriceDiscount]) - pp.[StandardCost]) * sod.[OrderQty]) AS [Benefice_Percu],
+    dd.[date_id],
+    dp.[produit_No],
+    dst.[SalesTerritory_ID]
+FROM [AdventureWorks2022].[Sales].[SalesOrderHeader] soh
+INNER JOIN [AdventureWorks2022].[Sales].[SalesOrderDetail] sod ON soh.[SalesOrderID] = sod.[SalesOrderID]
+INNER JOIN [AdventureWorks2022].[Production].[Product] pp ON sod.[ProductID] = pp.[ProductID]
+INNER JOIN [AdventureWorks2022].[Sales].[SalesTerritory] sst ON sst.[TerritoryID] = soh.[TerritoryID]
+INNER JOIN [dbo].[dim_date] dd ON dd.[date] = soh.[OrderDate]
+INNER JOIN [dbo].[dim_produit] dp ON pp.[ProductNumber] = dp.[ProductNumber]
+INNER JOIN [dbo].[dim_SalesTerritory] dst ON sst.[Name] = dst.[Nom_Territoire]
+    AND dst.[Zone_Geographique] = sst.[Group]
+    AND dst.[Code_Pays_Region_ISO] = sst.[CountryRegionCode]
+GROUP BY dd.[date_id], dp.[produit_No], dst.[SalesTerritory_ID] 
+ORDER BY dp.[produit_No],dd.[date_id],dst.[SalesTerritory_ID],[Benefice_Percu]; --- just to clarify more 
+
+
+
+END TRY
+
+BEGIN CATCH
+    PRINT('');
+    PRINT('ErrorNumber = ' + CAST(ERROR_NUMBER() AS CHAR(10)));
+    PRINT('ErrorSeverity = ' + CAST(ERROR_SEVERITY() AS CHAR(10)));
+    PRINT('ErrorLine = ' + CAST(ERROR_LINE() AS CHAR(10)));
+    PRINT('ErrorMessage = ' + CAST(ERROR_MESSAGE() AS CHAR(400)));
+
+    IF @@TRANCOUNT > 0 
+        ROLLBACK TRANSACTION;
+END CATCH
+
+IF @@TRANCOUNT > 0
+    COMMIT TRANSACTION;
+GO
+
+---test
+EXEC dbo.populate_fait_Vente;
+GO
+
+select * from [dbo].[fait_vente]
+
+
+
+
+
+
+
+
